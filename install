@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+mkdir -p "$PLUGIN_DATA_ROOT"
+chmod 0750 "$PLUGIN_DATA_ROOT"
+
+# Seed the ACL file so redis-server can read it on first boot. Empty file
+# means "only the built-in `default` user, configured via --requirepass".
+mkdir -p "${PLUGIN_DATA_ROOT}/_redisdata"
+[[ -f "${PLUGIN_DATA_ROOT}/_redisdata/users.acl" ]] || \
+  : >"${PLUGIN_DATA_ROOT}/_redisdata/users.acl"
+
+docker image pull "${PLUGIN_IMAGE}:${PLUGIN_IMAGE_VERSION}"
+
+ensure_shared_container
+
+# Make the data dir writable by the dokku user — every runtime invocation
+# of the plugin's subcommands runs as 'dokku' (via SSH or the dokku CLI),
+# not root. Skip `_redisdata`: that's owned by the redis container UID
+# and must stay that way.
+if id -u dokku >/dev/null 2>&1; then
+  find "$PLUGIN_DATA_ROOT" -mindepth 0 -maxdepth 0 -exec chown dokku:dokku {} +
+  find "$PLUGIN_DATA_ROOT" -mindepth 1 -maxdepth 1 ! -name '_redisdata' \
+    -exec chown -R dokku:dokku {} +
+fi
+
+# Install the periodic quota check. Operators can disable by removing this file.
+CRON_FILE="/etc/cron.d/dokku-shared-redis"
+if [[ -w "$(dirname "$CRON_FILE")" || "$(id -u)" -eq 0 ]]; then
+  cat >"$CRON_FILE" <<'CRON_EOF'
+# Periodic quota enforcement for dokku-shared-redis tenants.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * dokku dokku shared-redis:check-quotas >/dev/null 2>&1
+CRON_EOF
+  chmod 0644 "$CRON_FILE" || true
+  echo "shared-redis: installed cron at $CRON_FILE"
+else
+  echo "shared-redis: skipped cron install (no write permission to /etc/cron.d)" >&2
+fi
+
+echo "shared-redis: install complete"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+
+cat <<EOF
+Usage: dokku $PLUGIN_COMMAND_PREFIX:<command> [args]
+
+Commands:
+  $PLUGIN_COMMAND_PREFIX:create <name>                  Create a new tenant (ACL user scoped to <name>:*).
+  $PLUGIN_COMMAND_PREFIX:destroy <name> -f              Drop a tenant: ACL DELUSER + DEL all <name>:* keys.
+  $PLUGIN_COMMAND_PREFIX:link <name> <app>              Set REDIS_URL on <app>.
+  $PLUGIN_COMMAND_PREFIX:unlink <name> <app>            Remove REDIS_URL from <app>.
+  $PLUGIN_COMMAND_PREFIX:list                           List all tenants on this host.
+  $PLUGIN_COMMAND_PREFIX:info <name>                    Tenant details: keys, memory, quota, links.
+  $PLUGIN_COMMAND_PREFIX:connect <name>                 Open redis-cli as the tenant user.
+  $PLUGIN_COMMAND_PREFIX:set-quota <name> [--mb N] [--keys N]   Set per-tenant caps.
+  $PLUGIN_COMMAND_PREFIX:unset-quota <name>             Clear quota overrides; revert to default.
+  $PLUGIN_COMMAND_PREFIX:check-quotas                   Run the quota sweep manually (auto-runs every 5min).
+  $PLUGIN_COMMAND_PREFIX:export <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:import <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:help                           Show this help text.
+
+Tenant isolation: Redis 6+ ACL user scoped to keys matching <name>:* —
+all keys your app writes MUST be prefixed with "<name>:" or Redis will
+return a NOPERM error. See README for details.
+EOF

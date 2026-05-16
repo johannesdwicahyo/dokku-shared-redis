@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Plugin identity
+PLUGIN_COMMAND_PREFIX="shared-redis"
+PLUGIN_SERVICE="shared-redis"
+
+# Shared Redis container
+PLUGIN_IMAGE="redis"
+PLUGIN_IMAGE_VERSION="7-alpine"
+PLUGIN_CONTAINER_NAME="dokku-shared-redis"
+PLUGIN_NETWORK_NAME="dokku-shared-redis"
+PLUGIN_DB_PORT="6379"
+
+# Filesystem layout (overrideable for tests)
+PLUGIN_DATA_ROOT="${PLUGIN_DATA_ROOT:-/var/lib/dokku/services/shared-redis}"
+PLUGIN_ADMIN_PASSWORD_FILE="${PLUGIN_DATA_ROOT}/.admin_password"
+
+# Defaults (per-tenant)
+PLUGIN_DEFAULT_QUOTA_MB="${PLUGIN_DEFAULT_QUOTA_MB:-25}"
+PLUGIN_DEFAULT_QUOTA_KEYS="${PLUGIN_DEFAULT_QUOTA_KEYS:-10000}"
+
+# Tenant name validation. Lowercase alpha start, [a-z0-9_-], 1..31 chars.
+# The name is used as both the ACL username and the key prefix, so keep it
+# free of characters that have meaning in Redis ACL syntax or key globs.
+PLUGIN_NAME_REGEX='^[a-z][a-z0-9_-]{0,30}$'
+
+export PLUGIN_COMMAND_PREFIX PLUGIN_SERVICE \
+       PLUGIN_IMAGE PLUGIN_IMAGE_VERSION \
+       PLUGIN_CONTAINER_NAME PLUGIN_NETWORK_NAME PLUGIN_DB_PORT \
+       PLUGIN_DATA_ROOT PLUGIN_ADMIN_PASSWORD_FILE \
+       PLUGIN_DEFAULT_QUOTA_MB PLUGIN_DEFAULT_QUOTA_KEYS \
+       PLUGIN_NAME_REGEX

@@ -1,5 +1,7 @@
 [plugin]
-description = "Shared multi-tenant Redis plugin for Dokku"
-version = "0.0.1"
+name = "shared-redis"
+description = "Dokku plugin: shared multi-tenant Redis on a single host"
+version = "0.1.0"
+license = "MIT"
+
 [plugin.config]
-core = "false"
