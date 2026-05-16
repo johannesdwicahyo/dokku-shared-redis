@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+mkdir -p "$PLUGIN_DATA_ROOT"
+chmod 0750 "$PLUGIN_DATA_ROOT"
+
+# Seed the ACL file so redis-server can read it on first boot. Empty file
+# means "only the built-in `default` user, configured via --requirepass".
+mkdir -p "${PLUGIN_DATA_ROOT}/_redisdata"
+[[ -f "${PLUGIN_DATA_ROOT}/_redisdata/users.acl" ]] || \
+  : >"${PLUGIN_DATA_ROOT}/_redisdata/users.acl"
+
+docker image pull "${PLUGIN_IMAGE}:${PLUGIN_IMAGE_VERSION}"
+
+ensure_shared_container
+
+# Make the data dir writable by the dokku user — every runtime invocation
+# of the plugin's subcommands runs as 'dokku' (via SSH or the dokku CLI),
+# not root. Skip `_redisdata`: that's owned by the redis container UID
+# and must stay that way.
+if id -u dokku >/dev/null 2>&1; then
+  find "$PLUGIN_DATA_ROOT" -mindepth 0 -maxdepth 0 -exec chown dokku:dokku {} +
+  find "$PLUGIN_DATA_ROOT" -mindepth 1 -maxdepth 1 ! -name '_redisdata' \
+    -exec chown -R dokku:dokku {} +
+fi
+
+echo "shared-redis: install complete"

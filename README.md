@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/johannesdwicahyo/dokku-shared-redis/actions/workflows/ci.yml/badge.svg)](https://github.com/johannesdwicahyo/dokku-shared-redis/actions/workflows/ci.yml)
 
-> **Status: scaffolding.** Sibling project of [dokku-shared-postgres](https://github.com/johannesdwicahyo/dokku-shared-postgres). Implementation begins after that one is at v0.1.0.
+> **Status: v0.0.x scaffold — no functional subcommands yet.** Only `shared-redis:help` is wired up. Sibling project of [dokku-shared-postgres](https://github.com/johannesdwicahyo/dokku-shared-postgres) (now at v0.2.1).
 
 A [Dokku](https://dokku.com) plugin that provides **shared, multi-tenant Redis** on a single host. One Redis container per host; per-tenant isolation via Redis 6+ ACL users + key-prefix pattern. Plugin-level memory + key-count quota enforcement.
 

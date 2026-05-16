@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Shared helpers for shared-redis. Sourced — never executed directly.
+set -euo pipefail
+
+generate_password() {
+  # 16 random bytes -> 32 hex chars. Available everywhere; no openssl dep.
+  od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
+}
+
+# Run redis-cli against the shared container as the `default` (admin) user.
+# Executes inside the container via `docker exec` so the plugin does not
+# require a host-side redis-tools install and does not depend on the
+# container hostname being resolvable from the host.
+run_redis_admin() {
+  local pw
+  pw="$(<"$PLUGIN_ADMIN_PASSWORD_FILE")"
+  docker exec -i \
+    "$PLUGIN_CONTAINER_NAME" \
+    redis-cli --no-auth-warning -a "$pw" "$@"
+}
+
+# Make sure the shared Redis container is up. Idempotent.
+ensure_shared_container() {
+  local existing
+  existing="$(docker ps --filter "name=^${PLUGIN_CONTAINER_NAME}$" --format '{{.Names}}' || true)"
+  if [[ -n "$existing" ]]; then
+    return 0
+  fi
+
+  docker network create "$PLUGIN_NETWORK_NAME" >/dev/null 2>&1 || true
+
+  if [[ ! -s "$PLUGIN_ADMIN_PASSWORD_FILE" ]]; then
+    mkdir -p "$(dirname "$PLUGIN_ADMIN_PASSWORD_FILE")"
+    generate_password >"$PLUGIN_ADMIN_PASSWORD_FILE"
+    chmod 600 "$PLUGIN_ADMIN_PASSWORD_FILE"
+  fi
+
+  local admin_pw
+  admin_pw="$(<"$PLUGIN_ADMIN_PASSWORD_FILE")"
+
+  # `aclfile` makes ACL SETUSER changes persist across restarts.
+  # AOF is on for durability; the file lives in the same _redisdata volume.
+  docker run --detach \
+    --name "$PLUGIN_CONTAINER_NAME" \
+    --network "$PLUGIN_NETWORK_NAME" \
+    --restart always \
+    -v "${PLUGIN_DATA_ROOT}/_redisdata:/data" \
+    "${PLUGIN_IMAGE}:${PLUGIN_IMAGE_VERSION}" \
+    redis-server \
+      --requirepass "$admin_pw" \
+      --appendonly yes \
+      --aclfile /data/users.acl \
+    >/dev/null
+}

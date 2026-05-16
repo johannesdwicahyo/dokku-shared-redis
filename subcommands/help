@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+
+cat <<EOF
+Usage: dokku $PLUGIN_COMMAND_PREFIX:<command> [args]
+
+Commands (planned for v0.1.0 — scaffold only at this revision):
+  $PLUGIN_COMMAND_PREFIX:create <name>           Create a new tenant (ACL user + key prefix).  [planned]
+  $PLUGIN_COMMAND_PREFIX:destroy <name> -f       Drop a tenant and its keys.                   [planned]
+  $PLUGIN_COMMAND_PREFIX:link <name> <app>       Set REDIS_URL on <app>.                       [planned]
+  $PLUGIN_COMMAND_PREFIX:unlink <name> <app>     Remove REDIS_URL from <app>.                  [planned]
+  $PLUGIN_COMMAND_PREFIX:list                    List all tenants on this host.                [planned]
+  $PLUGIN_COMMAND_PREFIX:info <name>             Print tenant details (keys, memory, conns).   [planned]
+  $PLUGIN_COMMAND_PREFIX:connect <name>          Open redis-cli as the tenant user.            [planned]
+  $PLUGIN_COMMAND_PREFIX:set-quota <name> ...    Set memory + key-count caps for a tenant.     [planned]
+  $PLUGIN_COMMAND_PREFIX:unset-quota <name>      Clear quota overrides; revert to default.     [planned]
+  $PLUGIN_COMMAND_PREFIX:check-quotas            Run the quota sweep manually.                 [planned]
+  $PLUGIN_COMMAND_PREFIX:export <name>           Stream tenant keys to stdout (portable).      [planned]
+  $PLUGIN_COMMAND_PREFIX:import <name>           Restore an exported tenant from stdin.        [planned]
+  $PLUGIN_COMMAND_PREFIX:help                    Show this help text.
+
+Tenant isolation: Redis 6+ ACL user scoped to keys matching <name>:* —
+all keys your app writes MUST be prefixed with "<name>:" or Redis will
+return a NOPERM error. See README for details.
+EOF
