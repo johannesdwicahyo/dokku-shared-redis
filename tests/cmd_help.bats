@@ -5,7 +5,7 @@ setup() {
   setup_plugin_env
 }
 
-@test "subcommands/help prints usage with all planned subcommands" {
+@test "subcommands/help prints usage with all subcommands" {
   run "$REPO_ROOT/subcommands/help" "shared-redis:help"
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"Usage: dokku shared-redis:"* ]]
@@ -23,10 +23,8 @@ setup() {
   [[ "$output" == *"Usage: dokku shared-redis:"* ]]
 }
 
-@test "subcommands/help works when invoked directly with cmd:sub as \$1 (Dokku 0.38 style)" {
-  # Dokku 0.38+ invokes subcommand scripts as: subcommands/help shared-redis:help
-  # The help script must not choke on this — it ignores args entirely.
+@test "help mentions the key-prefix gotcha" {
   run "$REPO_ROOT/subcommands/help" "shared-redis:help"
-  [[ "$status" -eq 0 ]]
-  [[ "$output" == *"shared-redis:create"* ]]
+  [[ "$output" == *"<name>:*"* ]]
+  [[ "$output" == *"NOPERM"* ]]
 }

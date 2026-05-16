@@ -9,10 +9,10 @@ setup_plugin_env() {
   export PLUGIN_DATA_ROOT="$BATS_TEST_TMPDIR/data"
   mkdir -p "$PLUGIN_DATA_ROOT"
 
-  # Stub bin must come first if/when tests stub out docker/redis-cli.
+  # Stub bin must come first.
   export PATH="$REPO_ROOT/tests/bin:$PATH"
 
-  # Stub I/O channels (reserved for future tests that mock docker).
+  # Stub I/O channels.
   export STUB_LOG="$BATS_TEST_TMPDIR/stub.log"
   export STUB_RESPONSES_DIR="$BATS_TEST_TMPDIR/stub_responses"
   mkdir -p "$STUB_RESPONSES_DIR"
@@ -21,4 +21,30 @@ setup_plugin_env() {
   # Make admin password lookup succeed by default.
   printf 'admin-pw\n' >"$BATS_TEST_TMPDIR/data/.admin_password"
   chmod 600 "$BATS_TEST_TMPDIR/data/.admin_password"
+}
+
+# Queue a canned response for the next call to <stub_name>.
+# Usage: stub_response docker '<body>'
+stub_response() {
+  local stub="$1" body="$2"
+  printf '%s' "$body" >>"$STUB_RESPONSES_DIR/$stub.queue"
+  printf '\n---END---\n' >>"$STUB_RESPONSES_DIR/$stub.queue"
+}
+
+# Count how many times <stub_name> was invoked.
+stub_call_count() {
+  local stub="$1"
+  grep -c "^${stub} " "$STUB_LOG" 2>/dev/null || true
+}
+
+# Assert the most recent stub log line matches a regex.
+assert_stub_called_with() {
+  local stub="$1" regex="$2"
+  local line
+  line="$(grep "^${stub} " "$STUB_LOG" | tail -n1)"
+  [[ "$line" =~ $regex ]] || {
+    echo "stub $stub last call did not match: $regex"
+    echo "actual: $line"
+    return 1
+  }
 }

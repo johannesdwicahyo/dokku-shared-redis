@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+shift || true
+
+name="${1:-}"
+flag="${2:-}"
+if [[ -z "$name" ]]; then
+  echo "usage: dokku $PLUGIN_COMMAND_PREFIX:connect <name> [--print-only]" >&2
+  exit 2
+fi
+if ! service_exists "$name"; then
+  echo "service does not exist: $name" >&2
+  exit 3
+fi
+
+pw="$(<"$PLUGIN_DATA_ROOT/$name/PASSWORD")"
+
+if [[ "$flag" == "--print-only" ]]; then
+  printf 'docker exec -it %s redis-cli --user %s -a <redacted>\n' \
+    "$PLUGIN_CONTAINER_NAME" "$name"
+  exit 0
+fi
+
+exec docker exec -it \
+  "$PLUGIN_CONTAINER_NAME" \
+  redis-cli --no-auth-warning --user "$name" -a "$pw"

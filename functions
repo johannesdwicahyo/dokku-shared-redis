@@ -7,16 +7,103 @@ generate_password() {
   od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
 }
 
+validate_name() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || return 1
+  [[ "$name" =~ $PLUGIN_NAME_REGEX ]] || return 1
+}
+
+service_exists() {
+  local name="$1"
+  [[ -d "$PLUGIN_DATA_ROOT/$name" ]]
+}
+
+service_list() {
+  [[ -d "$PLUGIN_DATA_ROOT" ]] || return 0
+  local d
+  for d in "$PLUGIN_DATA_ROOT"/*/; do
+    [[ -d "$d" ]] || continue
+    local name="${d%/}"
+    name="${name##*/}"
+    [[ "$name" == .* ]] && continue
+    # `_redisdata` is the container's data volume mount, not a tenant.
+    # Anything starting with `_` is reserved for plugin internals.
+    [[ "$name" == _* ]] && continue
+    printf '%s\n' "$name"
+  done | sort
+}
+
 # Run redis-cli against the shared container as the `default` (admin) user.
 # Executes inside the container via `docker exec` so the plugin does not
-# require a host-side redis-tools install and does not depend on the
-# container hostname being resolvable from the host.
+# require host-side redis-tools and does not depend on the container
+# hostname resolving from the host.
 run_redis_admin() {
   local pw
   pw="$(<"$PLUGIN_ADMIN_PASSWORD_FILE")"
   docker exec -i \
     "$PLUGIN_CONTAINER_NAME" \
     redis-cli --no-auth-warning -a "$pw" "$@"
+}
+
+service_dsn() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 1; }
+  local password
+  password="$(<"$PLUGIN_DATA_ROOT/$name/PASSWORD")"
+  printf 'redis://%s:%s@%s:%s/0\n' \
+    "$name" "$password" "$PLUGIN_CONTAINER_NAME" "$PLUGIN_DB_PORT"
+}
+
+# Returns "<key_count> <memory_bytes>" for the tenant. Single Redis round
+# trip via EVAL; keeps the docker stub simple for tests (one canned line).
+tenant_usage() {
+  local name="$1"
+  local raw
+  raw="$(run_redis_admin --no-raw EVAL \
+    "local c='0' local n=0 local s=0 repeat local r=redis.call('SCAN',c,'MATCH',KEYS[1],'COUNT',1000) c=r[1] for i,k in ipairs(r[2]) do n=n+1 s=s+(tonumber(redis.call('MEMORY','USAGE',k)) or 0) end until c=='0' return n..' '..s" \
+    1 "${name}:*" 2>/dev/null || true)"
+  # Strip any surrounding quotes / whitespace.
+  raw="${raw//\"/}"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  [[ -z "$raw" ]] && raw="0 0"
+  printf '%s\n' "$raw"
+}
+
+service_info() {
+  local name="$1"
+  if ! service_exists "$name"; then
+    echo "service does not exist: $name" >&2
+    return 3
+  fi
+
+  local usage keys bytes links_csv quota_mb quota_keys violated
+  usage="$(tenant_usage "$name")"
+  keys="${usage% *}"
+  bytes="${usage#* }"
+  quota_mb="$(service_get_quota_mb "$name")"
+  quota_keys="$(service_get_quota_keys "$name")"
+  violated="false"
+  [[ -f "$PLUGIN_DATA_ROOT/$name/QUOTA_VIOLATED" ]] && violated="true"
+
+  if [[ -s "$PLUGIN_DATA_ROOT/$name/LINKS" ]]; then
+    links_csv="$(tr '\n' ',' <"$PLUGIN_DATA_ROOT/$name/LINKS")"
+    links_csv="${links_csv%,}"
+  else
+    links_csv=""
+  fi
+
+  printf 'name=%s\n'         "$name"
+  printf 'user=%s\n'         "$name"
+  printf 'key_prefix=%s:\n'  "$name"
+  printf 'host=%s\n'         "$PLUGIN_CONTAINER_NAME"
+  printf 'port=%s\n'         "$PLUGIN_DB_PORT"
+  printf 'keys=%s\n'         "$keys"
+  printf 'memory_bytes=%s\n' "$bytes"
+  printf 'quota_mb=%s\n'     "$quota_mb"
+  printf 'quota_keys=%s\n'   "$quota_keys"
+  printf 'read_only=%s\n'    "$violated"
+  printf 'linked_apps=%s\n'  "$links_csv"
 }
 
 # Make sure the shared Redis container is up. Idempotent.
@@ -51,4 +138,208 @@ ensure_shared_container() {
       --appendonly yes \
       --aclfile /data/users.acl \
     >/dev/null
+}
+
+service_create() {
+  local name="$1"
+  validate_name "$name" || { echo "invalid tenant name: $name" >&2; return 2; }
+  if service_exists "$name"; then
+    echo "service already exists: $name" >&2
+    return 3
+  fi
+  ensure_shared_container
+
+  local pw
+  pw="$(generate_password)"
+
+  # Write metadata BEFORE issuing ACL — destroy can clean up if it fails.
+  mkdir -p "$PLUGIN_DATA_ROOT/$name"
+  printf '%s' "$pw"   >"$PLUGIN_DATA_ROOT/$name/PASSWORD"
+  : >"$PLUGIN_DATA_ROOT/$name/LINKS"
+  chmod 600 "$PLUGIN_DATA_ROOT/$name/PASSWORD"
+
+  # ACL: scoped to keys matching "<name>:*", full command surface, login on.
+  run_redis_admin ACL SETUSER "$name" on ">$pw" "~${name}:*" "+@all" >/dev/null
+  # Persist the ACL file so the user survives a container restart.
+  run_redis_admin ACL SAVE >/dev/null
+}
+
+# Delete every key matching "<name>:*" — used by destroy. Single round trip.
+purge_tenant_keys() {
+  local name="$1"
+  run_redis_admin --no-raw EVAL \
+    "local c='0' local n=0 repeat local r=redis.call('SCAN',c,'MATCH',KEYS[1],'COUNT',1000) c=r[1] for i,k in ipairs(r[2]) do redis.call('DEL',k) n=n+1 end until c=='0' return n" \
+    1 "${name}:*" >/dev/null
+}
+
+service_destroy() {
+  local name="$1"
+  validate_name "$name" || { echo "invalid tenant name: $name" >&2; return 2; }
+  if ! service_exists "$name"; then
+    echo "service does not exist: $name" >&2
+    return 3
+  fi
+
+  purge_tenant_keys "$name"
+  run_redis_admin ACL DELUSER "$name" >/dev/null || true
+  run_redis_admin ACL SAVE >/dev/null || true
+
+  rm -rf "${PLUGIN_DATA_ROOT:?}/$name"
+}
+
+service_link() {
+  local name="$1" app="${2:-}"
+  if ! service_exists "$name"; then
+    echo "service does not exist: $name" >&2
+    return 3
+  fi
+  if [[ -z "$app" ]]; then
+    echo "app name required" >&2
+    return 2
+  fi
+
+  local dsn
+  dsn="$(service_dsn "$name")"
+
+  dokku config:set --no-restart "$app" "REDIS_URL=$dsn"
+
+  local links_file="$PLUGIN_DATA_ROOT/$name/LINKS"
+  if ! grep -qx "$app" "$links_file" 2>/dev/null; then
+    printf '%s\n' "$app" >>"$links_file"
+  fi
+}
+
+service_unlink() {
+  local name="$1" app="${2:-}"
+  if ! service_exists "$name"; then
+    echo "service does not exist: $name" >&2
+    return 3
+  fi
+  if [[ -z "$app" ]]; then
+    echo "app name required" >&2
+    return 2
+  fi
+
+  dokku config:unset --no-restart "$app" REDIS_URL || true
+
+  local links_file="$PLUGIN_DATA_ROOT/$name/LINKS"
+  if [[ -f "$links_file" ]]; then
+    grep -vx "$app" "$links_file" >"${links_file}.tmp" || true
+    mv "${links_file}.tmp" "$links_file"
+  fi
+}
+
+service_get_quota_mb() {
+  local name="$1"
+  local f="$PLUGIN_DATA_ROOT/$name/QUOTA_MB"
+  if [[ -s "$f" ]]; then
+    cat "$f"
+  else
+    printf '%s' "$PLUGIN_DEFAULT_QUOTA_MB"
+  fi
+}
+
+service_get_quota_keys() {
+  local name="$1"
+  local f="$PLUGIN_DATA_ROOT/$name/QUOTA_KEYS"
+  if [[ -s "$f" ]]; then
+    cat "$f"
+  else
+    printf '%s' "$PLUGIN_DEFAULT_QUOTA_KEYS"
+  fi
+}
+
+service_set_quota() {
+  local name="$1" mb="${2:-}" keys="${3:-}"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  if [[ -z "$mb" && -z "$keys" ]]; then
+    echo "at least one of --mb or --keys is required" >&2
+    return 2
+  fi
+  if [[ -n "$mb" ]]; then
+    [[ "$mb" =~ ^[1-9][0-9]*$ ]] || { echo "quota --mb must be a positive integer: $mb" >&2; return 2; }
+    printf '%s' "$mb" >"$PLUGIN_DATA_ROOT/$name/QUOTA_MB"
+  fi
+  if [[ -n "$keys" ]]; then
+    [[ "$keys" =~ ^[1-9][0-9]*$ ]] || { echo "quota --keys must be a positive integer: $keys" >&2; return 2; }
+    printf '%s' "$keys" >"$PLUGIN_DATA_ROOT/$name/QUOTA_KEYS"
+  fi
+}
+
+service_unset_quota() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  rm -f "$PLUGIN_DATA_ROOT/$name/QUOTA_MB" \
+        "$PLUGIN_DATA_ROOT/$name/QUOTA_KEYS"
+}
+
+# Flip the tenant's ACL between full and read-only without losing the
+# password. `ACL SETUSER` is incremental; `resetcommands` clears the
+# command grant list before re-applying.
+acl_set_readonly() {
+  local name="$1"
+  run_redis_admin ACL SETUSER "$name" resetcommands +@read +@connection +ping >/dev/null
+  run_redis_admin ACL SAVE >/dev/null
+}
+
+acl_set_full() {
+  local name="$1"
+  run_redis_admin ACL SETUSER "$name" resetcommands +@all >/dev/null
+  run_redis_admin ACL SAVE >/dev/null
+}
+
+service_check_quota() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+
+  local quota_mb quota_keys usage keys bytes cap_bytes
+  quota_mb="$(service_get_quota_mb "$name")"
+  quota_keys="$(service_get_quota_keys "$name")"
+  usage="$(tenant_usage "$name")"
+  keys="${usage% *}"
+  bytes="${usage#* }"
+  [[ -z "$keys" ]]  && keys=0
+  [[ -z "$bytes" ]] && bytes=0
+  cap_bytes=$((quota_mb * 1024 * 1024))
+
+  local marker="$PLUGIN_DATA_ROOT/$name/QUOTA_VIOLATED"
+  local over=false
+  if (( bytes > cap_bytes )) || (( keys > quota_keys )); then
+    over=true
+  fi
+
+  if $over; then
+    if [[ ! -f "$marker" ]]; then
+      acl_set_readonly "$name"
+      : >"$marker"
+      printf 'flipped name=%s keys=%s bytes=%s cap_keys=%s cap_bytes=%s -> read_only\n' \
+        "$name" "$keys" "$bytes" "$quota_keys" "$cap_bytes"
+    fi
+  else
+    if [[ -f "$marker" ]]; then
+      acl_set_full "$name"
+      rm -f "$marker"
+      printf 'released name=%s keys=%s bytes=%s cap_keys=%s cap_bytes=%s -> writable\n' \
+        "$name" "$keys" "$bytes" "$quota_keys" "$cap_bytes"
+    fi
+  fi
+}
+
+# Per-tenant export/import is a v0.2 stretch goal — see CLAUDE.md. A
+# robust implementation has to handle binary DUMP payloads, TTLs, and
+# every Redis value type; the dokku-redis-style host-level RDB snapshot
+# is sufficient for v0.1.0. These stubs keep the CLI surface stable so
+# we don't break callers when the real implementation lands.
+service_export() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  echo "shared-redis:export is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal); use host-level RDB snapshot of the shared container for now" >&2
+  return 1
+}
+
+service_import() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  echo "shared-redis:import is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal)" >&2
+  return 1
 }

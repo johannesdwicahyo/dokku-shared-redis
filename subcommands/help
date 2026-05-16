@@ -9,20 +9,20 @@ source "$PLUGIN_ROOT/config"
 cat <<EOF
 Usage: dokku $PLUGIN_COMMAND_PREFIX:<command> [args]
 
-Commands (planned for v0.1.0 — scaffold only at this revision):
-  $PLUGIN_COMMAND_PREFIX:create <name>           Create a new tenant (ACL user + key prefix).  [planned]
-  $PLUGIN_COMMAND_PREFIX:destroy <name> -f       Drop a tenant and its keys.                   [planned]
-  $PLUGIN_COMMAND_PREFIX:link <name> <app>       Set REDIS_URL on <app>.                       [planned]
-  $PLUGIN_COMMAND_PREFIX:unlink <name> <app>     Remove REDIS_URL from <app>.                  [planned]
-  $PLUGIN_COMMAND_PREFIX:list                    List all tenants on this host.                [planned]
-  $PLUGIN_COMMAND_PREFIX:info <name>             Print tenant details (keys, memory, conns).   [planned]
-  $PLUGIN_COMMAND_PREFIX:connect <name>          Open redis-cli as the tenant user.            [planned]
-  $PLUGIN_COMMAND_PREFIX:set-quota <name> ...    Set memory + key-count caps for a tenant.     [planned]
-  $PLUGIN_COMMAND_PREFIX:unset-quota <name>      Clear quota overrides; revert to default.     [planned]
-  $PLUGIN_COMMAND_PREFIX:check-quotas            Run the quota sweep manually.                 [planned]
-  $PLUGIN_COMMAND_PREFIX:export <name>           Stream tenant keys to stdout (portable).      [planned]
-  $PLUGIN_COMMAND_PREFIX:import <name>           Restore an exported tenant from stdin.        [planned]
-  $PLUGIN_COMMAND_PREFIX:help                    Show this help text.
+Commands:
+  $PLUGIN_COMMAND_PREFIX:create <name>                  Create a new tenant (ACL user scoped to <name>:*).
+  $PLUGIN_COMMAND_PREFIX:destroy <name> -f              Drop a tenant: ACL DELUSER + DEL all <name>:* keys.
+  $PLUGIN_COMMAND_PREFIX:link <name> <app>              Set REDIS_URL on <app>.
+  $PLUGIN_COMMAND_PREFIX:unlink <name> <app>            Remove REDIS_URL from <app>.
+  $PLUGIN_COMMAND_PREFIX:list                           List all tenants on this host.
+  $PLUGIN_COMMAND_PREFIX:info <name>                    Tenant details: keys, memory, quota, links.
+  $PLUGIN_COMMAND_PREFIX:connect <name>                 Open redis-cli as the tenant user.
+  $PLUGIN_COMMAND_PREFIX:set-quota <name> [--mb N] [--keys N]   Set per-tenant caps.
+  $PLUGIN_COMMAND_PREFIX:unset-quota <name>             Clear quota overrides; revert to default.
+  $PLUGIN_COMMAND_PREFIX:check-quotas                   Run the quota sweep manually (auto-runs every 5min).
+  $PLUGIN_COMMAND_PREFIX:export <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:import <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:help                           Show this help text.
 
 Tenant isolation: Redis 6+ ACL user scoped to keys matching <name>:* —
 all keys your app writes MUST be prefixed with "<name>:" or Redis will

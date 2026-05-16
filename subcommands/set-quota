@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+shift || true
+
+name="${1:-}"
+shift || true
+
+if [[ -z "$name" ]]; then
+  echo "usage: dokku $PLUGIN_COMMAND_PREFIX:set-quota <name> [--mb N] [--keys N]" >&2
+  exit 2
+fi
+
+mb=""
+keys=""
+while (($#)); do
+  case "$1" in
+    --mb)   mb="${2:-}";   shift 2 || { echo "--mb requires a value" >&2; exit 2; } ;;
+    --keys) keys="${2:-}"; shift 2 || { echo "--keys requires a value" >&2; exit 2; } ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+service_set_quota "$name" "$mb" "$keys"
+echo "quota set: $name${mb:+ --mb $mb}${keys:+ --keys $keys}"
