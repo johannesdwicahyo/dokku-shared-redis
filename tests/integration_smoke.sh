@@ -51,7 +51,7 @@ grep -q "ACL user:.*$TENANT"      /tmp/.smoke-info || { echo "FAIL: info missing
 grep -q "Key prefix:.*${TENANT}:" /tmp/.smoke-info || { echo "FAIL: info missing Key prefix"; exit 1; }
 
 step "6. write within prefix succeeds; outside prefix fails with NOPERM"
-pw="$(awk -F: '{gsub(/.*\/\//,"",$2); print $2}' /tmp/.smoke-dsn | awk -F@ '{print $1}')"
+pw="$(</var/lib/dokku/services/shared-redis/$TENANT/PASSWORD)"
 ok="$(docker exec dokku-shared-redis redis-cli --no-auth-warning --user "$TENANT" -a "$pw" SET "${TENANT}:hello" world)"
 [[ "$ok" == "OK" ]] || { echo "FAIL: prefixed SET didn't return OK: $ok"; exit 1; }
 nope="$(docker exec dokku-shared-redis redis-cli --no-auth-warning --user "$TENANT" -a "$pw" SET "other-prefix:hi" world 2>&1 || true)"

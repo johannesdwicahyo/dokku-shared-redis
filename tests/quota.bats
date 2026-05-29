@@ -69,7 +69,7 @@ setup() {
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"flipped"* ]]
   [[ -f "$PLUGIN_DATA_ROOT/demo/QUOTA_VIOLATED" ]]
-  run grep -c 'ACL SETUSER demo resetcommands +@read' "$STUB_LOG"
+  run grep -c 'ACL SETUSER demo nocommands +@read' "$STUB_LOG"
   [[ "$output" -ge 1 ]]
 }
 
@@ -95,7 +95,7 @@ setup() {
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"released"* ]]
   [[ ! -f "$PLUGIN_DATA_ROOT/demo/QUOTA_VIOLATED" ]]
-  run grep -c 'ACL SETUSER demo resetcommands +@all' "$STUB_LOG"
+  run grep -c 'ACL SETUSER demo allcommands' "$STUB_LOG"
   [[ "$output" -ge 1 ]]
 }
 

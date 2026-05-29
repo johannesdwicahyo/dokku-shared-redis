@@ -37,12 +37,28 @@ service_list() {
 # Executes inside the container via `docker exec` so the plugin does not
 # require host-side redis-tools and does not depend on the container
 # hostname resolving from the host.
+#
+# redis-cli returns exit 0 even when the Redis server rejects the command
+# (e.g. ACL syntax error → "ERR ..."), which silently broke check-quotas
+# in v0.1.0. We parse the first line for `^ERR ` / `^WRONGPASS ` /
+# `^NOPERM ` and propagate as exit 1 so callers (and `set -e`) catch it.
 run_redis_admin() {
   local pw
   pw="$(<"$PLUGIN_ADMIN_PASSWORD_FILE")"
-  docker exec -i \
-    "$PLUGIN_CONTAINER_NAME" \
-    redis-cli --no-auth-warning -a "$pw" "$@"
+  local out
+  out="$(docker exec -i "$PLUGIN_CONTAINER_NAME" \
+        redis-cli --no-auth-warning -a "$pw" "$@" 2>&1)" || return $?
+  # The "AUTH failed: ERR AUTH <password>…" pre-amble is harmless noise
+  # produced by `-a` against a passwordless `default` user (we use
+  # --aclfile, not --requirepass, so default has no password). Strip
+  # those lines before deciding if the actual command errored.
+  local real
+  real="$(printf '%s\n' "$out" | grep -vE '^AUTH failed: ERR AUTH ' || true)"
+  if printf '%s\n' "$real" | grep -qE '^(ERR |WRONGPASS|NOPERM)'; then
+    printf '%s\n' "$real" >&2
+    return 1
+  fi
+  printf '%s\n' "$real"
 }
 
 service_dsn() {
@@ -278,13 +294,18 @@ service_unset_quota() {
 # command grant list before re-applying.
 acl_set_readonly() {
   local name="$1"
-  run_redis_admin ACL SETUSER "$name" resetcommands +@read +@connection +ping >/dev/null
+  # `nocommands` (shorthand for -@all) clears the command grant list; we
+  # then add back read + connection + ping. NOTE: `resetcommands` is NOT
+  # valid Redis 7 ACL syntax — only `nocommands`, `-command`, and
+  # `-@category` remove grants.
+  run_redis_admin ACL SETUSER "$name" nocommands +@read +@connection +ping >/dev/null
   run_redis_admin ACL SAVE >/dev/null
 }
 
 acl_set_full() {
   local name="$1"
-  run_redis_admin ACL SETUSER "$name" resetcommands +@all >/dev/null
+  # `allcommands` (shorthand for +@all) restores full command access.
+  run_redis_admin ACL SETUSER "$name" allcommands >/dev/null
   run_redis_admin ACL SAVE >/dev/null
 }
 
