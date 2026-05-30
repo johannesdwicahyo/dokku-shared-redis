@@ -346,21 +346,60 @@ service_check_quota() {
   fi
 }
 
-# Per-tenant export/import is a v0.2 stretch goal — see CLAUDE.md. A
-# robust implementation has to handle binary DUMP payloads, TTLs, and
-# every Redis value type; the dokku-redis-style host-level RDB snapshot
-# is sufficient for v0.1.0. These stubs keep the CLI surface stable so
-# we don't break callers when the real implementation lands.
+# Export tenant data to stdout as a sequence of redis-cli pipe-format
+# RESTORE commands. Preserves TTLs (via PTTL) and all value types (via
+# DUMP --no-raw). ASCII-safe so file transfer is trivial. Scans only
+# keys matching <name>:* — tenant-scoped via the ACL user.
+#
+# Usage:
+#   dokku shared-redis:export my-cache > dump.txt
 service_export() {
   local name="$1"
   service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
-  echo "shared-redis:export is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal); use host-level RDB snapshot of the shared container for now" >&2
-  return 1
+  local password
+  password="$(<"$PLUGIN_DATA_ROOT/$name/PASSWORD")"
+
+  local cursor=0
+  while :; do
+    local result batch_cursor keys
+    result="$(docker exec "$PLUGIN_CONTAINER_NAME" redis-cli \
+      --user "$name" --pass "$password" --no-auth-warning \
+      SCAN "$cursor" MATCH "${name}:*" COUNT 1000)"
+    batch_cursor="$(echo "$result" | head -1)"
+    keys="$(echo "$result" | tail -n +2)"
+
+    while IFS= read -r key; do
+      [[ -z "$key" ]] && continue
+      local pttl payload
+      pttl="$(docker exec "$PLUGIN_CONTAINER_NAME" redis-cli \
+        --user "$name" --pass "$password" --no-auth-warning PTTL "$key")"
+      # -2 means key expired/vanished between SCAN and PTTL — skip it
+      [[ "$pttl" == "-2" ]] && continue
+      # -1 means no TTL; RESTORE uses 0 to mean "no expiry"
+      [[ "$pttl" == "-1" ]] && pttl="0"
+      payload="$(docker exec "$PLUGIN_CONTAINER_NAME" redis-cli \
+        --user "$name" --pass "$password" --no-auth-warning --no-raw DUMP "$key" \
+        | sed 's/^"\(.*\)"$/\1/')"
+      [[ -z "$payload" ]] && continue
+      printf 'RESTORE "%s" %s "%s" REPLACE\n' "$key" "$pttl" "$payload"
+    done <<< "$keys"
+
+    cursor="$batch_cursor"
+    [[ "$cursor" == "0" ]] && break
+  done
 }
 
+# Reads the export format from stdin and replays via redis-cli --pipe.
+# The ACL user can only RESTORE keys matching its own prefix, so
+# cross-tenant import is blocked at the Redis layer.
+#
+# Usage:
+#   dokku shared-redis:import my-cache < dump.txt
 service_import() {
   local name="$1"
   service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
-  echo "shared-redis:import is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal)" >&2
-  return 1
+  local password
+  password="$(<"$PLUGIN_DATA_ROOT/$name/PASSWORD")"
+  docker exec -i "$PLUGIN_CONTAINER_NAME" redis-cli \
+    --user "$name" --pass "$password" --no-auth-warning --pipe
 }

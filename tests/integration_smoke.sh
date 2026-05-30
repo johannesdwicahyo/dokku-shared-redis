@@ -105,5 +105,76 @@ sudo -u dokku dokku shared-redis:destroy "$TENANT2" -f
 sudo -u dokku dokku shared-redis:list | grep -q "^$TENANT$" \
   && { echo "FAIL: tenant still in list after destroy"; exit 1; } || true
 
+step "15. export/import round-trip preserves keys, TTLs, and all value types"
+SLUG_RT="smoke-roundtrip-$(date +%s)"
+sudo -u dokku dokku shared-redis:create "$SLUG_RT" >/dev/null
+PW_RT="$(<"/var/lib/dokku/services/shared-redis/$SLUG_RT/PASSWORD")"
+
+# Seed: string, string-with-TTL, hash, list, sorted set
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  SET "${SLUG_RT}:str" "hello" >/dev/null
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  SET "${SLUG_RT}:str-ttl" "expires" EX 600 >/dev/null
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  HSET "${SLUG_RT}:hash" f1 v1 f2 v2 >/dev/null
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  RPUSH "${SLUG_RT}:list" a b c >/dev/null
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  ZADD "${SLUG_RT}:zset" 1 one 2 two >/dev/null
+
+# Export to file and verify it is non-empty
+sudo -u dokku dokku shared-redis:export "$SLUG_RT" > /tmp/smoke-dump.txt
+[[ -s /tmp/smoke-dump.txt ]] \
+  || { echo "FAIL: export produced empty file"; exit 1; }
+
+# Wipe the tenant's own keys so we can prove import restores them
+docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning \
+  DEL "${SLUG_RT}:str" "${SLUG_RT}:str-ttl" \
+      "${SLUG_RT}:hash" "${SLUG_RT}:list" "${SLUG_RT}:zset" >/dev/null
+
+# Import back (same tenant, so ACL prefix matches)
+sudo -u dokku dokku shared-redis:import "$SLUG_RT" < /tmp/smoke-dump.txt
+
+# Verify string
+ACTUAL_STR="$(docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning GET "${SLUG_RT}:str")"
+[[ "$ACTUAL_STR" == "hello" ]] \
+  || { echo "FAIL: string lost after import (got '$ACTUAL_STR')"; exit 1; }
+
+# Verify TTL was preserved (should be >0, <=600)
+ACTUAL_TTL="$(docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning TTL "${SLUG_RT}:str-ttl")"
+(( ACTUAL_TTL > 0 && ACTUAL_TTL <= 600 )) \
+  || { echo "FAIL: TTL lost after import (got '$ACTUAL_TTL')"; exit 1; }
+
+# Verify hash field
+ACTUAL_HASH="$(docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning HGET "${SLUG_RT}:hash" f1)"
+[[ "$ACTUAL_HASH" == "v1" ]] \
+  || { echo "FAIL: hash lost after import (got '$ACTUAL_HASH')"; exit 1; }
+
+# Verify list contents
+ACTUAL_LIST="$(docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning LRANGE "${SLUG_RT}:list" 0 -1 \
+  | tr '\n' ',')"
+[[ "$ACTUAL_LIST" == "a,b,c," ]] \
+  || { echo "FAIL: list lost after import (got '$ACTUAL_LIST')"; exit 1; }
+
+# Verify sorted set
+ACTUAL_ZSET="$(docker exec dokku-shared-redis redis-cli \
+  --user "$SLUG_RT" --pass "$PW_RT" --no-auth-warning ZRANGE "${SLUG_RT}:zset" 0 -1)"
+[[ "$ACTUAL_ZSET" == *"one"* ]] \
+  || { echo "FAIL: sorted set lost after import (got '$ACTUAL_ZSET')"; exit 1; }
+
+sudo -u dokku dokku shared-redis:destroy "$SLUG_RT" -f >/dev/null
+rm -f /tmp/smoke-dump.txt
+echo "OK"
+
 echo
 echo "=== ALL SMOKE STEPS PASSED ==="

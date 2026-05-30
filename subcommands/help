@@ -20,8 +20,8 @@ Commands:
   $PLUGIN_COMMAND_PREFIX:set-quota <name> [--mb N] [--keys N]   Set per-tenant caps.
   $PLUGIN_COMMAND_PREFIX:unset-quota <name>             Clear quota overrides; revert to default.
   $PLUGIN_COMMAND_PREFIX:check-quotas                   Run the quota sweep manually (auto-runs every 5min).
-  $PLUGIN_COMMAND_PREFIX:export <name>                  [stretch goal — not in v0.1.0]
-  $PLUGIN_COMMAND_PREFIX:import <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:export <name>                  Dump all tenant keys to stdout (redis-cli pipe format). Preserves TTLs + all value types.
+  $PLUGIN_COMMAND_PREFIX:import <name>                  Read a dump from stdin and replay via redis-cli --pipe. ACL-scoped: cross-tenant import blocked at Redis layer.
   $PLUGIN_COMMAND_PREFIX:help                           Show this help text.
 
 Tenant isolation: Redis 6+ ACL user scoped to keys matching <name>:* —
