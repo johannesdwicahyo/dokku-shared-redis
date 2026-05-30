@@ -86,8 +86,8 @@ shared-redis:connect <name>                 Open redis-cli as the tenant user.
 shared-redis:set-quota <name> [--mb N] [--keys N]   Set per-tenant caps.
 shared-redis:unset-quota <name>             Revert to default caps.
 shared-redis:check-quotas                   Run the quota sweep manually.
-shared-redis:export <name>                  [stretch goal — not in v0.1.0]
-shared-redis:import <name>                  [stretch goal — not in v0.1.0]
+shared-redis:export <name>                  Dump all tenant keys to stdout (redis-cli pipe format). Preserves TTLs + all value types.
+shared-redis:import <name>                  Read a dump from stdin and replay via redis-cli --pipe. ACL-scoped: cross-tenant import is blocked at the Redis layer.
 shared-redis:help                           Show usage.
 ```
 
